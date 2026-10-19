@@ -65,7 +65,7 @@ API 服务商和地址由服务器环境变量统一管理，浏览器参数与�
 
 此版本包含数据库迁移。发布时先备份本项目的整个 `shared` 目录，再在独立容器中执行迁移。回退到旧版代码必须同时恢复迁移前数据库，不能让旧代码读取密文。数据库降级迁移会清空密钥字段，不恢复明文。
 
-正式录入密钥前应配置 HTTPS，或者通过 SSH 端口转发在 `localhost` 访问管理页。现有 IP + HTTP 入口尚未更新为该功能版本。验证命令（在 backend 目录）：
+正式录入密钥前应配置 HTTPS，或者通过 SSH 端口转发在 `localhost` 访问管理页。2026-10-19 已部署账号绑定版本（代码提交 `a15e55b`），原管理员密码保留，原公共 Key 已迁移为初始管理员的独立绑定。公网入口仍使用 HTTP，录入新 Key 时使用 HTTPS 或 SSH 本地转发。验证命令（在 backend 目录）：
 
 ```bash
 .venv/bin/python -m unittest discover -s verification -p account_ai_credentials.py -v
