@@ -12,7 +12,10 @@ class Settings(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(50), nullable=False, unique=True, index=True, comment="用户ID")
     api_provider = Column(String(50), default="openai", comment="API提供商")
-    api_key = Column(String(500), comment="API密钥")
+    _api_key_ciphertext = Column("api_key", Text, comment="账号AI密钥密文")
+    ai_key_enabled = Column(Boolean, default=False, server_default="0", nullable=False)
+    ai_key_last4 = Column(String(4), nullable=True)
+    ai_key_updated_at = Column(DateTime, nullable=True)
     api_base_url = Column(String(500), comment="自定义API地址")
     llm_model = Column(String(100), default="gpt-6-sol", comment="模型名称")
     temperature = Column(Float, default=0.7, comment="温度参数")
@@ -50,5 +53,31 @@ class Settings(Base):
         Index('idx_user_id', 'user_id'),
     )
     
+    @property
+    def api_key(self):
+        if not self.ai_key_enabled:
+            return None
+        from app.services.user_ai_credentials import decrypt_key
+        return decrypt_key(self._api_key_ciphertext)
+
+    @api_key.setter
+    def api_key(self, value):
+        from app.services.user_ai_credentials import encrypt_key
+        from datetime import datetime, timezone
+        self._api_key_ciphertext = encrypt_key(value)
+        self.ai_key_enabled = bool(value)
+        self.ai_key_last4 = value[-4:] if value else None
+        self.ai_key_updated_at = datetime.now(timezone.utc)
+
+    @property
+    def ai_key_status(self):
+        if not self._api_key_ciphertext:
+            return "unbound"
+        return "bound" if self.ai_key_enabled else "disabled"
+
+    @property
+    def ai_key_masked(self):
+        return "••••" + self.ai_key_last4 if self.ai_key_last4 else None
+
     def __repr__(self):
         return f"<Settings(id={self.id}, user_id={self.user_id}, api_provider={self.api_provider})>"

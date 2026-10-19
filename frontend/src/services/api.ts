@@ -1230,6 +1230,12 @@ export const mcpPluginApi = {
 
 // 管理员API
 export const adminApi = {
+  bindAIKey: (userId: string, apiKey: string) =>
+    api.put(`/admin/users/${userId}/ai-key`, { api_key: apiKey }),
+  setAIKeyStatus: (userId: string, enabled: boolean) =>
+    api.put(`/admin/users/${userId}/ai-key/status`, { enabled }),
+  testAIKey: (userId: string, apiKey?: string) =>
+    api.post(`/admin/users/${userId}/ai-key/test`, { api_key: apiKey || undefined }),
   // 获取用户列表
   getUsers: () =>
     api.get<unknown, { total: number; users: User[] }>('/admin/users'),
@@ -1242,6 +1248,7 @@ export const adminApi = {
     avatar_url?: string;
     trust_level?: number;
     is_admin?: boolean;
+    api_key?: string;
   }) =>
     api.post<unknown, {
       success: boolean;

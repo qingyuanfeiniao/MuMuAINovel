@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Dict, Any, List, Optional
-from pathlib import Path
 from pydantic import BaseModel
 from datetime import datetime
 import httpx
@@ -23,11 +22,14 @@ from app.schemas.settings import (
     SystemSMTPSettingsResponse, SystemSMTPSettingsUpdate, SMTPTestRequest
 )
 from app.user_manager import User
-from app.logger import get_logger, safe_preview
-from app.config import settings as app_settings, PROJECT_ROOT
-from app.services.ai_service import AIService, create_user_ai_service, create_user_ai_service_with_mcp, normalize_provider
+from app.logger import get_logger
+from app.config import settings as app_settings
+from app.services.ai_service import AIService, create_user_ai_service, create_user_ai_service_with_mcp
 from app.services.email_service import email_service
 from app.security import validate_ai_http_url
+from app.services.user_ai_credentials import (
+    connection_defaults, resolve_account_runtime, managed_settings_update, scrub_credentials,
+)
 
 logger = get_logger(__name__)
 
@@ -42,78 +44,30 @@ class CoverSettingsTestRequest(BaseModel):
 
 
 def read_env_defaults() -> Dict[str, Any]:
-    """从.env文件读取默认配置（仅读取，不修改）"""
-    default_provider = (app_settings.default_ai_provider or "openai").lower().strip()
-    provider_defaults = _resolve_provider_defaults(default_provider)
+    """只继承公共地址和模型，绝不复制服务器的公用密钥。"""
     return {
-        "api_provider": default_provider,
-        "api_key": "" if default_provider == "xiaomi_mimo" else provider_defaults["api_key"],
-        "api_base_url": provider_defaults["api_base_url"],
-        "llm_model": app_settings.default_model,
-        "temperature": app_settings.default_temperature,
-        "max_tokens": app_settings.default_max_tokens,
+        **connection_defaults(), "api_key": "", "llm_model": app_settings.default_model,
+        "temperature": app_settings.default_temperature, "max_tokens": app_settings.default_max_tokens,
     }
 
 
 def _normalize_raw_provider(provider: Optional[str]) -> str:
-    """保留内置适配器名称，仅做大小写/空白标准化。"""
     return (provider or "openai").lower().strip()
 
 
-def _resolve_provider_defaults(provider: Optional[str]) -> Dict[str, str]:
-    """按 provider 解析环境变量默认配置，避免在代码中硬编码真实密钥。"""
-    raw_provider = _normalize_raw_provider(provider)
-    if raw_provider == "xiaomi_mimo":
-        return {
-            "api_key": app_settings.xiaomi_mimo_api_key or "",
-            "api_base_url": app_settings.xiaomi_mimo_base_url or "https://token-plan-cn.xiaomimimo.com/v1",
-        }
-    if raw_provider == "anthropic":
-        return {
-            "api_key": app_settings.anthropic_api_key or "",
-            "api_base_url": app_settings.anthropic_base_url or "",
-        }
-    if raw_provider == "gemini":
-        return {
-            "api_key": app_settings.gemini_api_key or "",
-            "api_base_url": app_settings.gemini_base_url or "",
-        }
-    return {
-        "api_key": app_settings.openai_api_key or "",
-        "api_base_url": app_settings.openai_base_url or "",
-    }
+def _apply_provider_defaults(provider, api_key, api_base_url) -> Dict[str, str]:
+    return {**connection_defaults(), "api_key": ""}
 
 
-def _apply_provider_defaults(provider: Optional[str], api_key: Optional[str], api_base_url: Optional[str]) -> Dict[str, str]:
-    """补齐内置适配器或环境变量中的 key/base_url。"""
-    defaults = _resolve_provider_defaults(provider)
-    return {
-        "api_key": api_key or defaults["api_key"],
-        "api_base_url": api_base_url or defaults["api_base_url"],
-    }
-
-
-def resolve_runtime_ai_config(provider: Optional[str], api_key: Optional[str], api_base_url: Optional[str]) -> Dict[str, str]:
-    """在 API 层解析运行时 AI 配置。
-
-    内置适配器（如 Xiaomi MiMo）只在数据库/前端保留 provider 标识与地址，真实 Key
-    仅从后端环境变量读取；传给 AIService 时转换为底层兼容 provider（OpenAI 格式）。
-    """
-    raw_provider = _normalize_raw_provider(provider)
-    resolved = _apply_provider_defaults(raw_provider, api_key, api_base_url)
-    runtime_provider = "openai" if raw_provider == "xiaomi_mimo" else (normalize_provider(raw_provider) or "openai")
-    return {
-        "raw_provider": raw_provider,
-        "api_provider": runtime_provider,
-        "api_key": resolved["api_key"],
-        "api_base_url": resolved["api_base_url"],
-    }
+def resolve_runtime_ai_config(provider, api_key, api_base_url) -> Dict[str, str]:
+    config = resolve_account_runtime(api_key)
+    return {**config, "raw_provider": config["api_provider"]}
 
 
 def _safe_load_preferences(raw_preferences: Optional[str]) -> Dict[str, Any]:
     """安全解析用户偏好设置。"""
     try:
-        return json.loads(raw_preferences or '{}')
+        return scrub_credentials(json.loads(raw_preferences or '{}'))
     except (json.JSONDecodeError, TypeError):
         return {}
 
@@ -141,11 +95,12 @@ def _build_ai_service_from_config(
     user_id: str,
     db: AsyncSession,
     enable_mcp: bool,
+    account_api_key: Optional[str],
 ) -> AIService:
     """基于指定配置创建AI服务。"""
     resolved_config = resolve_runtime_ai_config(
         config.get('api_provider'),
-        config.get('api_key'),
+        account_api_key,
         config.get('api_base_url'),
     )
     return create_user_ai_service_with_mcp(
@@ -179,7 +134,7 @@ def require_admin(user: User = Depends(require_login)):
 async def get_or_create_admin_settings(db: AsyncSession, user: User) -> Settings:
     """获取或创建管理员设置，系统级 SMTP 配置挂在管理员设置记录上"""
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user.user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user.user_id)
     )
     settings = result.scalar_one_or_none()
 
@@ -223,7 +178,7 @@ async def get_user_ai_service(
     from app.models.mcp_plugin import MCPPlugin
     
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user.user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user.user_id)
     )
     settings = result.scalar_one_or_none()
     
@@ -288,7 +243,7 @@ async def get_user_ai_service_from_db_by_usage(
     from app.models.mcp_plugin import MCPPlugin
 
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user_id)
     )
     settings = result.scalar_one_or_none()
 
@@ -319,6 +274,7 @@ async def get_user_ai_service_from_db_by_usage(
                     user_id=user_id,
                     db=db,
                     enable_mcp=enable_mcp,
+                    account_api_key=settings.api_key,
                 )
             logger.warning(f"用户 {user_id} 配置的章节内容分析预设不存在，回退默认API配置: {preset_id}")
 
@@ -348,7 +304,7 @@ async def get_settings(
     如果用户没有保存过设置，自动从.env创建并保存到数据库
     """
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user.user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user.user_id)
     )
     settings = result.scalar_one_or_none()
     
@@ -515,12 +471,12 @@ async def save_settings(
     """
     # 查找现有设置
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user.user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user.user_id)
     )
     settings = result.scalar_one_or_none()
     
     # 准备数据
-    settings_dict = data.model_dump(exclude_unset=True)
+    settings_dict = managed_settings_update(data.model_dump(exclude_unset=True))
     
     if settings:
         # 更新现有设置
@@ -541,7 +497,6 @@ async def save_settings(
                 # 检查配置是否发生变化
                 config_changed = (
                     preset_config.get('api_provider') != settings_dict.get('api_provider', settings.api_provider) or
-                    preset_config.get('api_key') != settings_dict.get('api_key', settings.api_key) or
                     preset_config.get('api_base_url') != settings_dict.get('api_base_url', settings.api_base_url) or
                     preset_config.get('llm_model') != settings_dict.get('llm_model', settings.llm_model) or
                     preset_config.get('temperature') != settings_dict.get('temperature', settings.temperature) or
@@ -585,7 +540,7 @@ async def update_settings(
     仅保存到数据库
     """
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user.user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user.user_id)
     )
     settings = result.scalar_one_or_none()
     
@@ -593,7 +548,7 @@ async def update_settings(
         raise HTTPException(status_code=404, detail="设置不存在，请先创建设置")
     
     # 更新设置
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = managed_settings_update(data.model_dump(exclude_unset=True))
     for key, value in update_data.items():
         setattr(settings, key, value)
     
@@ -613,18 +568,23 @@ async def delete_settings(
     删除当前用户的设置
     """
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user.user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user.user_id)
     )
     settings = result.scalar_one_or_none()
     
     if not settings:
         raise HTTPException(status_code=404, detail="设置不存在")
     
-    await db.delete(settings)
+    # 重置个人参数，管理员分配的密钥及绑定状态保留。
+    settings.temperature = app_settings.default_temperature
+    settings.max_tokens = app_settings.default_max_tokens
+    settings.llm_model = app_settings.default_model
+    settings.system_prompt = None
+    settings.preferences = "{}"
     await db.commit()
     logger.info(f"用户 {user.user_id} 删除设置")
     
-    return {"message": "设置已删除", "user_id": user.user_id}
+    return {"message": "个人参数已重置，账号密钥绑定保留", "user_id": user.user_id}
 
 
 @router.get("/models")
@@ -632,7 +592,8 @@ async def get_available_models(
     api_key: Optional[str] = "",
     api_base_url: Optional[str] = "",
     provider: str = "openai",
-    user: User = Depends(require_login)
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     从配置的 API 获取可用的模型列表
@@ -647,7 +608,8 @@ async def get_available_models(
     """
     try:
         raw_provider = _normalize_raw_provider(provider)
-        resolved_config = resolve_runtime_ai_config(raw_provider, api_key, api_base_url)
+        account_settings = await get_user_settings(user.user_id, db)
+        resolved_config = resolve_runtime_ai_config(raw_provider, account_settings.api_key, api_base_url)
         provider = resolved_config["api_provider"]
         api_key = resolved_config["api_key"]
         api_base_url = validate_ai_http_url(resolved_config["api_base_url"])
@@ -718,7 +680,7 @@ async def get_available_models(
                 raise HTTPException(status_code=400, detail=f"不支持的提供商: {provider}")
             
     except httpx.HTTPStatusError as e:
-        logger.error(f"获取模型列表失败 (HTTP {e.response.status_code}): {safe_preview(e.response.text, 500)}")
+        logger.error(f"获取模型列表失败 (HTTP {e.response.status_code}): [上游错误正文已隐藏]")
         if e.response.status_code == 404:
             raise HTTPException(
                 status_code=400,
@@ -729,18 +691,18 @@ async def get_available_models(
             detail=f"无法从 API 获取模型列表 (HTTP {e.response.status_code})"
         )
     except httpx.RequestError as e:
-        logger.error(f"请求模型列表失败: {str(e)}")
+        logger.error("请求模型列表失败")
         raise HTTPException(
             status_code=400,
-            detail=f"无法连接到 API: {str(e)}"
+            detail="无法连接到 AI 服务，请检查服务器配置。"
         )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取模型列表时发生错误: {str(e)}")
+        logger.error("获取模型列表时发生错误")
         raise HTTPException(
             status_code=500,
-            detail=f"获取模型列表失败: {str(e)}"
+            detail="获取模型列表失败，请检查服务器配置。"
         )
 
 
@@ -755,7 +717,11 @@ class ApiTestRequest(BaseModel):
 
 
 @router.post("/check-function-calling")
-async def check_function_calling_support(data: ApiTestRequest):
+async def check_function_calling_support(
+    data: ApiTestRequest,
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db),
+):
     """
     检查模型是否支持 Function Calling（工具调用）
     
@@ -771,7 +737,8 @@ async def check_function_calling_support(data: ApiTestRequest):
         检测结果包含支持状态、详细信息和建议
     """
     raw_provider = _normalize_raw_provider(data.provider)
-    resolved_config = resolve_runtime_ai_config(raw_provider, data.api_key, data.api_base_url)
+    account_settings = await get_user_settings(user.user_id, db)
+    resolved_config = resolve_runtime_ai_config(raw_provider, account_settings.api_key, data.api_base_url)
     api_key = resolved_config["api_key"]
     api_base_url = resolved_config["api_base_url"]
     provider = resolved_config["api_provider"]
@@ -902,7 +869,7 @@ async def check_function_calling_support(data: ApiTestRequest):
         return result
         
     except ValueError as e:
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         logger.error(f"❌ Function Calling 检测配置错误: {error_msg}")
         return {
             "success": False,
@@ -918,7 +885,7 @@ async def check_function_calling_support(data: ApiTestRequest):
         }
         
     except TimeoutError as e:
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         logger.error(f"❌ Function Calling 检测超时: {error_msg}")
         return {
             "success": False,
@@ -934,7 +901,7 @@ async def check_function_calling_support(data: ApiTestRequest):
         }
         
     except Exception as e:
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         error_type = type(e).__name__
         
         logger.error(f"❌ Function Calling 检测失败: {error_msg}")
@@ -978,7 +945,11 @@ async def check_function_calling_support(data: ApiTestRequest):
 
 
 @router.post("/test")
-async def test_api_connection(data: ApiTestRequest):
+async def test_api_connection(
+    data: ApiTestRequest,
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db),
+):
     """
     测试 API 连接和配置是否正确
     
@@ -989,7 +960,8 @@ async def test_api_connection(data: ApiTestRequest):
         测试结果包含状态、响应时间和详细信息
     """
     raw_provider = _normalize_raw_provider(data.provider)
-    resolved_config = resolve_runtime_ai_config(raw_provider, data.api_key, data.api_base_url)
+    account_settings = await get_user_settings(user.user_id, db)
+    resolved_config = resolve_runtime_ai_config(raw_provider, account_settings.api_key, data.api_base_url)
     api_key = resolved_config["api_key"]
     api_base_url = resolved_config["api_base_url"]
     provider = resolved_config["api_provider"]
@@ -1038,7 +1010,7 @@ async def test_api_connection(data: ApiTestRequest):
         logger.info(f"  - 响应时间: {response_time}ms")
         
         # 安全地处理响应内容（确保是字符串）
-        response_str = str(response) if response else 'N/A'
+        response_str = (str(response).replace(api_key, '[已隐藏]') if api_key else str(response)) if response else 'N/A'
         logger.info(f"  - 响应内容长度: {len(response_str)}")
         
         return {
@@ -1059,7 +1031,7 @@ async def test_api_connection(data: ApiTestRequest):
         
     except json.JSONDecodeError as e:
         # 上游接口返回了 HTTP 成功状态，但响应体不是合法 JSON。
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         logger.error(f"❌ API 响应解析失败: {error_msg}")
         logger.error(f"  - 错误类型: {type(e).__name__}")
         return {
@@ -1076,7 +1048,7 @@ async def test_api_connection(data: ApiTestRequest):
 
     except ValueError as e:
         # 配置错误
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         logger.error(f"❌ API 配置错误: {error_msg}")
         return {
             "success": False,
@@ -1092,7 +1064,7 @@ async def test_api_connection(data: ApiTestRequest):
         
     except TimeoutError as e:
         # 超时错误
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         logger.error(f"❌ API 请求超时: {error_msg}")
         return {
             "success": False,
@@ -1108,7 +1080,7 @@ async def test_api_connection(data: ApiTestRequest):
         
     except Exception as e:
         # 其他错误
-        error_msg = str(e)
+        error_msg = str(e).replace(api_key, "[已隐藏]") if api_key else str(e)
         error_type = type(e).__name__
         
         logger.error(f"❌ API 测试失败: {error_msg}")
@@ -1168,7 +1140,7 @@ async def test_api_connection(data: ApiTestRequest):
 async def get_user_settings(user_id: str, db: AsyncSession) -> Settings:
     """获取用户settings，如果不存在则创建"""
     result = await db.execute(
-        select(Settings).where(Settings.user_id == user_id)
+        select(Settings).execution_options(populate_existing=True).where(Settings.user_id == user_id)
     )
     settings = result.scalar_one_or_none()
     
@@ -1259,7 +1231,7 @@ async def create_preset(
         "is_active": False,
         "created_at": datetime.now().isoformat(),
         "config": {
-            **data.config.model_dump(),
+            **scrub_credentials(data.config.model_dump()),
             "api_provider": _normalize_raw_provider(data.config.api_provider)
         }
     }
@@ -1312,7 +1284,7 @@ async def update_preset(
         target_preset['description'] = data.description
     if data.config is not None:
         target_preset['config'] = {
-            **data.config.model_dump(),
+            **scrub_credentials(data.config.model_dump()),
             'api_provider': _normalize_raw_provider(data.config.api_provider)
         }
     
@@ -1403,8 +1375,7 @@ async def activate_preset(
     # 应用配置到Settings主字段
     config = target_preset['config']
     resolved_config = _apply_provider_defaults(config.get('api_provider'), config.get('api_key'), config.get('api_base_url'))
-    settings.api_provider = _normalize_raw_provider(config['api_provider'])
-    settings.api_key = config.get('api_key') or ""
+    settings.api_provider = resolved_config["api_provider"]
     settings.api_base_url = resolved_config["api_base_url"]
     settings.llm_model = config['llm_model']
     settings.temperature = config['temperature']
@@ -1493,7 +1464,7 @@ async def test_preset(
     # 确保传递完整参数，与当前配置测试保持一致
     config = target_preset['config']
     test_request = ApiTestRequest(
-        api_key=config['api_key'],
+        api_key="",
         api_base_url=config.get('api_base_url', ''),
         provider=config['api_provider'],
         llm_model=config['llm_model'],
@@ -1502,7 +1473,7 @@ async def test_preset(
     )
     
     logger.info(f"用户 {user.user_id} 测试预设: {target_preset['name']}")
-    return await test_api_connection(test_request)
+    return await test_api_connection(test_request, user, db)
 
 
 @router.post("/presets/from-current", response_model=PresetResponse)
@@ -1522,7 +1493,7 @@ async def create_preset_from_current(
     # 从当前Settings主字段读取配置
     current_config = APIKeyPresetConfig(
         api_provider=_normalize_raw_provider(settings.api_provider),
-        api_key=settings.api_key,
+        api_key="",
         api_base_url=settings.api_base_url,
         llm_model=settings.llm_model,
         temperature=settings.temperature,

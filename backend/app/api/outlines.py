@@ -902,8 +902,7 @@ def _parse_ai_response(ai_response: str, raise_on_error: bool = False) -> list:
     try:
         # 使用统一的JSON清洗方法（从AIService导入）
         from app.services.ai_service import AIService
-        ai_service_temp = AIService()
-        cleaned_text = ai_service_temp._clean_json_response(ai_response)
+        cleaned_text = AIService._clean_json_response(ai_response)
         
         outline_data = loads_json(cleaned_text)
         

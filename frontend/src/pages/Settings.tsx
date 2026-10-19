@@ -36,6 +36,7 @@ export default function SettingsPage() {
     suggestions?: string[];
   } | null>(null);
   const [showTestResult, setShowTestResult] = useState(false);
+  const [keyBinding, setKeyBinding] = useState<{status: string; masked?: string | null}>({status: 'unbound'});
   const [testingCoverApi, setTestingCoverApi] = useState(false);
   const [coverTestResult, setCoverTestResult] = useState<{
     success: boolean;
@@ -90,6 +91,7 @@ export default function SettingsPage() {
     setInitialLoading(true);
     try {
       const settings = await settingsApi.getSettings();
+      setKeyBinding({status: settings.ai_key_status || 'unbound', masked: settings.ai_key_masked});
       form.setFieldsValue({
         ...defaultCoverSettings,
         ...settings,
@@ -136,7 +138,7 @@ export default function SettingsPage() {
     try {
       const normalizedValues: SettingsUpdate = {
         ...values,
-        api_key: builtInKeyProviders.includes(values.api_provider || '') ? '' : values.api_key,
+        api_key: '',
       };
       // 检查是否与 MCP 缓存的配置不一致
       const verifiedConfigStr = localStorage.getItem('mcp_verified_config');
@@ -253,9 +255,9 @@ export default function SettingsPage() {
       cancelText: '取消',
       onOk: () => {
         form.setFieldsValue({
-          api_provider: 'openai',
+          api_provider: form.getFieldValue('api_provider'),
           api_key: '',
-          api_base_url: 'https://api.openai.com/v1',
+          api_base_url: form.getFieldValue('api_base_url'),
           llm_model: DEFAULT_LLM_MODEL,
           temperature: 0.7,
           max_tokens: 2000,
@@ -329,8 +331,8 @@ export default function SettingsPage() {
   ];
 
   const selectedProvider = Form.useWatch('api_provider', form);
-  const selectedCoverProvider = Form.useWatch('cover_api_provider', form);
   const selectedPresetProvider = Form.useWatch('api_provider', presetForm);
+  const selectedCoverProvider = Form.useWatch('cover_api_provider', form);
 
   const handleProviderChange = (value: string) => {
     const provider = apiProviders.find(p => p.value === value);
@@ -432,15 +434,12 @@ export default function SettingsPage() {
   };
 
   const handleFetchModels = async (silent: boolean = false) => {
-    const apiKey = form.getFieldValue('api_key');
     const apiBaseUrl = form.getFieldValue('api_base_url');
     const provider = form.getFieldValue('api_provider');
 
-    const isBuiltInKeyProvider = builtInKeyProviders.includes(provider);
-
-    if ((!apiKey && !isBuiltInKeyProvider) || !apiBaseUrl) {
+    if (!apiBaseUrl) {
       if (!silent) {
-        message.warning('请先填写 API 密钥和 API 地址');
+        message.warning('请先配置 API 地址');
       }
       return;
     }
@@ -448,7 +447,7 @@ export default function SettingsPage() {
     setFetchingModels(true);
     try {
       const response = await settingsApi.getAvailableModels({
-        api_key: isBuiltInKeyProvider ? '' : apiKey,
+        api_key: '',
         api_base_url: apiBaseUrl,
         provider: provider || 'openai'
       });
@@ -479,16 +478,13 @@ export default function SettingsPage() {
   };
 
   const handleTestConnection = async () => {
-    const apiKey = form.getFieldValue('api_key');
     const apiBaseUrl = form.getFieldValue('api_base_url');
     const provider = form.getFieldValue('api_provider');
     const modelName = form.getFieldValue('llm_model');
     const temperature = form.getFieldValue('temperature');
     const maxTokens = form.getFieldValue('max_tokens');
 
-    const isBuiltInKeyProvider = builtInKeyProviders.includes(provider);
-
-    if ((!apiKey && !isBuiltInKeyProvider) || !apiBaseUrl || !provider || !modelName) {
+    if (!apiBaseUrl || !provider || !modelName) {
       message.warning('请先填写完整的配置信息');
       return;
     }
@@ -498,7 +494,7 @@ export default function SettingsPage() {
 
     try {
       const result = await settingsApi.testApiConnection({
-        api_key: isBuiltInKeyProvider ? '' : apiKey,
+        api_key: '',
         api_base_url: apiBaseUrl,
         provider: provider,
         llm_model: modelName,
@@ -564,8 +560,8 @@ export default function SettingsPage() {
       setEditingPreset(null);
       presetForm.resetFields();
       presetForm.setFieldsValue({
-        api_provider: 'openai',
-        api_base_url: 'https://api.openai.com/v1',
+        api_provider: form.getFieldValue('api_provider'),
+        api_base_url: form.getFieldValue('api_base_url'),
         llm_model: DEFAULT_LLM_MODEL,
         temperature: 0.7,
         max_tokens: 32000,
@@ -586,15 +582,12 @@ export default function SettingsPage() {
 
   // 预设编辑窗口：获取模型列表
   const handleFetchPresetModels = async (silent: boolean = false) => {
-    const apiKey = presetForm.getFieldValue('api_key');
     const apiBaseUrl = presetForm.getFieldValue('api_base_url');
     const provider = presetForm.getFieldValue('api_provider');
 
-    const isBuiltInKeyProvider = builtInKeyProviders.includes(provider);
-
-    if ((!apiKey && !isBuiltInKeyProvider) || !apiBaseUrl) {
+    if (!apiBaseUrl) {
       if (!silent) {
-        message.warning('请先填写 API 密钥和 API 地址');
+        message.warning('请先配置 API 地址');
       }
       return;
     }
@@ -602,7 +595,7 @@ export default function SettingsPage() {
     setFetchingPresetModels(true);
     try {
       const response = await settingsApi.getAvailableModels({
-        api_key: isBuiltInKeyProvider ? '' : apiKey,
+        api_key: '',
         api_base_url: apiBaseUrl,
         provider: provider || 'openai'
       });
@@ -658,10 +651,9 @@ export default function SettingsPage() {
   const handlePresetSave = async () => {
     try {
       const values = await presetForm.validateFields();
-      const isBuiltInKeyProvider = builtInKeyProviders.includes(values.api_provider);
       const config: APIKeyPresetConfig = {
         api_provider: values.api_provider,
-        api_key: isBuiltInKeyProvider ? '' : values.api_key,
+        api_key: '',
         api_base_url: values.api_base_url,
         llm_model: values.llm_model,
         temperature: values.temperature,
@@ -1205,14 +1197,14 @@ export default function SettingsPage() {
                       {/* 默认配置提示 */}
                       {isDefaultSettings && (
                         <Alert
-                          message="使用 .env 文件中的默认配置"
+                          message="使用系统默认参数"
                           description={
                             <div style={{ fontSize: isMobile ? '12px' : '14px' }}>
                               <p style={{ margin: '8px 0' }}>
-                                当前显示的是从服务器 <code>.env</code> 文件读取的默认配置。
+                                当前使用服务器提供的默认模型和生成参数。
                               </p>
                               <p style={{ margin: '8px 0 0 0' }}>
-                                点击"保存设置"后，配置将保存到数据库并同步更新到 <code>.env</code> 文件。
+                                点击“保存设置”后，参数仅保存到当前账号。AI 密钥由管理员单独分配。
                               </p>
                             </div>
                           }
@@ -1240,6 +1232,13 @@ export default function SettingsPage() {
                           onFinish={handleSave}
                           autoComplete="off"
                         >
+                          <Alert
+                            showIcon
+                            type={keyBinding.status === 'bound' ? 'success' : 'warning'}
+                            message={keyBinding.status === 'bound' ? `账号 AI 密钥已绑定 ${keyBinding.masked || ''}` : keyBinding.status === 'disabled' ? '账号 AI 密钥已停用' : '账号尚未绑定 AI 密钥'}
+                            description="密钥由管理员在账号管理中分配。未绑定或停用时仍可阅读和编辑小说；生成、分析和连接测试需要有效密钥。API 地址由服务器统一配置，预设共用本账号密钥。"
+                            style={{marginBottom: 20}}
+                          />
                           <Form.Item
                             label={
                               <Space size={4}>
@@ -1253,7 +1252,7 @@ export default function SettingsPage() {
                             name="api_provider"
                             rules={[{ required: true, message: '请选择API提供商' }]}
                           >
-                            <Select size={isMobile ? 'middle' : 'large'} onChange={handleProviderChange}>
+                            <Select disabled size={isMobile ? 'middle' : 'large'} onChange={handleProviderChange}>
                               {apiProviders.map(provider => (
                                 <Option key={provider.value} value={provider.value}>
                                   {provider.label}
@@ -1262,35 +1261,24 @@ export default function SettingsPage() {
                             </Select>
                           </Form.Item>
 
-
-                          {selectedProvider === 'xiaomi_mimo' && (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="Xiaomi MiMo 内置适配器"
-                              description="使用 OpenAI 兼容格式与内置服务地址。真实 Key 仅由后端环境变量提供，前端和数据库不会保存该 Key。"
-                              style={{ marginBottom: 16 }}
-                            />
-                          )}
-
                           <Form.Item
                             label={
                               <Space size={4}>
                                 <span>API 密钥</span>
                                 <InfoCircleOutlined
-                                  title="你的API密钥，将加密存储"
+                                  title="由管理员在账号管理中分配，仅显示尾号"
                                   style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
                                 />
                               </Space>
                             }
                             name="api_key"
-                            rules={builtInKeyProviders.includes(selectedProvider) ? [] : [{ required: true, message: '请输入API密钥' }]}
+                            rules={[]}
                           >
                             <Input.Password
                               size={isMobile ? 'middle' : 'large'}
-                              placeholder={builtInKeyProviders.includes(selectedProvider) ? '使用后端内置密钥' : 'sk-...'}
+                              placeholder={keyBinding.masked || '尚未绑定，请联系管理员'}
                               autoComplete="new-password"
-                              disabled={builtInKeyProviders.includes(selectedProvider)}
+                              disabled
                             />
                           </Form.Item>
 
@@ -1312,7 +1300,7 @@ export default function SettingsPage() {
                           >
                             <Input
                               size={isMobile ? 'middle' : 'large'}
-                              placeholder="https://api.openai.com/v1"
+                              disabled placeholder="https://api.openai.com/v1"
                             />
                           </Form.Item>
 
@@ -1897,24 +1885,13 @@ export default function SettingsPage() {
                   rules={[{ required: true, message: '请选择' }]}
                   style={{ marginBottom: 16 }}
                 >
-                  <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
+                  <Select disabled placeholder="选择提供商" onChange={handlePresetProviderChange}>
                     <Select.Option value="mumu">MuMuのAPI</Select.Option>
                     <Select.Option value="xiaomi_mimo">Xiaomi MiMo（内置）</Select.Option>
                     <Select.Option value="openai">OpenAI</Select.Option>
                     <Select.Option value="gemini">Google Gemini</Select.Option>
                   </Select>
                 </Form.Item>
-
-
-                {selectedPresetProvider === 'xiaomi_mimo' && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="Xiaomi MiMo 内置适配器"
-                    description="使用后端内置 Key 和 OpenAI 兼容接口地址，预设中不会保存真实 Key。"
-                    style={{ marginBottom: 16 }}
-                  />
-                )}
               </Col>
             </Row>
 
@@ -1933,12 +1910,12 @@ export default function SettingsPage() {
                 <Form.Item
                   name="api_key"
                   label="API Key"
-                  rules={builtInKeyProviders.includes(selectedPresetProvider) ? [] : [{ required: true, message: '请输入API Key' }]}
+                  rules={[]}
                   style={{ marginBottom: 16 }}
                 >
                   <Input.Password
-                    placeholder={builtInKeyProviders.includes(selectedPresetProvider) ? '使用后端内置密钥（不会暴露）' : 'sk-...'}
-                    disabled={builtInKeyProviders.includes(selectedPresetProvider)}
+                    placeholder="使用当前账号绑定的密钥"
+                    disabled
                   />
                 </Form.Item>
               </Col>
@@ -1948,7 +1925,7 @@ export default function SettingsPage() {
                   label="API Base URL"
                   style={{ marginBottom: 16 }}
                 >
-                  <Input placeholder="https://api.openai.com/v1" />
+                  <Input disabled placeholder="https://api.openai.com/v1" />
                 </Form.Item>
               </Col>
             </Row>

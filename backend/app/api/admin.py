@@ -2,7 +2,7 @@
 管理员API - 用户管理功能
 """
 from fastapi import APIRouter, HTTPException, Request, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from typing import Optional, List
 from datetime import datetime
 import hashlib
@@ -11,6 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
+from app.models.settings import Settings
+from app.services.user_ai_credentials import binding_summary, connection_defaults
 from app.user_manager import user_manager
 from app.user_password import password_manager
 from app.logger import get_logger
@@ -30,6 +32,7 @@ class CreateUserRequest(BaseModel):
     avatar_url: Optional[str] = Field(None, description="头像URL")
     trust_level: int = Field(0, ge=0, le=9, description="信任等级")
     is_admin: bool = Field(False, description="是否为管理员")
+    api_key: Optional[SecretStr] = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -97,11 +100,14 @@ async def get_users(
     try:
         all_users = await user_manager.get_all_users()
         
+        rows = (await db.execute(select(Settings))).scalars().all()
+        credentials = {row.user_id: row for row in rows}
         users_data = []
         for user in all_users:
             # user_manager 返回的是 Pydantic User 对象，直接转为 dict
             user_dict = user.model_dump()
             user_dict["is_active"] = user.trust_level != -1
+            user_dict.update(binding_summary(credentials.get(user.user_id)))
             users_data.append(user_dict)
         
         logger.info(f"管理员 {admin.user_id} 获取用户列表，共 {len(users_data)} 个用户")
@@ -123,6 +129,13 @@ async def create_user(
 ):
     """添加用户（仅管理员）"""
     try:
+        if data.api_key and len(data.api_key.get_secret_value().strip()) > 4096:
+            raise HTTPException(422, "AI 密钥长度不得超过 4096 字符。")
+        prepared_binding = None
+        if data.api_key and data.api_key.get_secret_value().strip():
+            # 创建账号前先确认密钥可加密，避免加密配置错误留下半成品账号。
+            prepared_binding = Settings(user_id="pending", **connection_defaults())
+            prepared_binding.api_key = data.api_key.get_secret_value().strip()
         # 检查用户名是否已存在
         all_users = await user_manager.get_all_users()
         for user in all_users:
@@ -146,7 +159,7 @@ async def create_user(
             # 直接更新数据库中的is_admin字段
             async with await user_manager._get_session() as session:
                 result = await session.execute(
-                    select(User).where(User.user_id == user_id)
+                    select(User).where(User.user_id == new_user.user_id)
                 )
                 db_user = result.scalar_one_or_none()
                 if db_user:
@@ -161,7 +174,10 @@ async def create_user(
             password=data.password
         )
         
-        # Settings 将在首次访问设置页面时自动创建（延迟初始化）
+        if prepared_binding is not None:
+            prepared_binding.user_id = new_user.user_id
+            db.add(prepared_binding)
+            await db.commit()
         
         logger.info(f"管理员 {admin.user_id} 创建了新用户 {new_user.user_id} ({data.username})")
         
@@ -368,6 +384,11 @@ async def delete_user(
             if db_user:
                 await session.delete(db_user)
             
+            # 删除账号绑定，防止同名账号重建后继承已删除账号的密钥。
+            credential = (await session.execute(select(Settings).where(Settings.user_id == user_id))).scalar_one_or_none()
+            if credential:
+                await session.delete(credential)
+
             # 删除密码记录
             from app.models.user import UserPassword
             result = await session.execute(
@@ -391,3 +412,71 @@ async def delete_user(
     except Exception as e:
         logger.error(f"删除用户失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"删除用户失败: {str(e)}")
+
+
+class BindAIKeyRequest(BaseModel):
+    api_key: SecretStr
+
+
+class AIKeyStatusRequest(BaseModel):
+    enabled: bool
+
+
+class TestAIKeyRequest(BaseModel):
+    api_key: Optional[SecretStr] = None
+
+
+async def _credential_row(user_id: str, db: AsyncSession) -> Settings:
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "用户不存在")
+    row = (await db.execute(select(Settings).where(Settings.user_id == user_id))).scalar_one_or_none()
+    if row is None:
+        row = Settings(user_id=user_id, **connection_defaults())
+        db.add(row)
+        await db.flush()
+    return row
+
+
+@router.put("/users/{user_id}/ai-key")
+async def bind_ai_key(user_id: str, data: BindAIKeyRequest, admin: User = Depends(check_admin), db: AsyncSession = Depends(get_db)):
+    value = data.api_key.get_secret_value().strip()
+    if not value or len(value) > 4096:
+        raise HTTPException(422, "请输入有效的 AI 密钥，长度不得超过 4096 字符。")
+    row = await _credential_row(user_id, db)
+    row.api_key = value
+    await db.commit()
+    logger.info("管理员 %s 更新账号 %s 的 AI 密钥绑定", admin.user_id, user_id)
+    return {"success": True, **binding_summary(row)}
+
+
+@router.put("/users/{user_id}/ai-key/status")
+async def set_ai_key_status(user_id: str, data: AIKeyStatusRequest, admin: User = Depends(check_admin), db: AsyncSession = Depends(get_db)):
+    row = await _credential_row(user_id, db)
+    if not row._api_key_ciphertext:
+        raise HTTPException(409, "该账号尚未绑定 AI 密钥。")
+    row.ai_key_enabled = data.enabled
+    row.ai_key_updated_at = datetime.now()
+    await db.commit()
+    logger.info("管理员 %s 修改账号 %s 的 AI 密钥启用状态", admin.user_id, user_id)
+    return {"success": True, **binding_summary(row)}
+
+
+@router.post("/users/{user_id}/ai-key/test")
+async def test_ai_key(user_id: str, data: TestAIKeyRequest, admin: User = Depends(check_admin), db: AsyncSession = Depends(get_db)):
+    from app.config import settings as app_settings
+    from app.services.ai_service import AIService
+    from app.services.user_ai_credentials import resolve_account_runtime
+    row = await _credential_row(user_id, db)
+    value = data.api_key.get_secret_value().strip() if data.api_key else row.api_key
+    if value and len(value) > 4096:
+        raise HTTPException(422, "AI 密钥长度不得超过 4096 字符。")
+    config = resolve_account_runtime(value)
+    try:
+        service = AIService(**config, default_model=app_settings.default_model, default_max_tokens=64)
+        await service.generate_text(prompt="请只回复：连接成功", max_tokens=64, auto_mcp=False)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "AI 连接测试失败，请检查密钥及服务配置。") from None
+    return {"success": True, "message": "AI 连接测试成功"}

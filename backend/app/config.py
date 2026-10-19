@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     database_enable_metrics: bool = True  # 启用性能指标收集
     
     # AI服务配置
+    ai_credential_encryption_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None
     xiaomi_mimo_api_key: Optional[str] = None

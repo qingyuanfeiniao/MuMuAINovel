@@ -1,5 +1,11 @@
+export interface UserAIKeyBinding {
+  ai_key_status?: 'unbound' | 'bound' | 'disabled';
+  ai_key_masked?: string | null;
+  ai_key_updated_at?: string | null;
+}
+
 // 用户类型定义
-export interface User {
+export interface User extends UserAIKeyBinding {
   user_id: string;
   username: string;
   display_name: string;
@@ -71,7 +77,7 @@ export interface SystemSMTPSettingsUpdate {
 }
 
 // 设置类型定义
-export interface Settings {
+export interface Settings extends UserAIKeyBinding {
   id: string;
   user_id: string;
   api_provider: string;

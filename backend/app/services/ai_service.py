@@ -116,15 +116,23 @@ class AIService:
         self._anthropic_provider: Optional[AnthropicProvider] = None
         self._gemini_provider: Optional[GeminiProvider] = None
         
+        from app.services.user_ai_credentials import resolve_account_runtime
+        managed = resolve_account_runtime(api_key)
+        import hashlib
+        self._credential_digest = hashlib.sha256(api_key.encode()).digest()
+        self.api_provider = managed["api_provider"]
+        api_provider = self.api_provider
+        api_base_url = managed["api_base_url"]
+        # 仅使用当前账号的密钥，不初始化任何其他供应商的公共密钥。
         # 初始化 OpenAI 兼容接口
         openai_key = None
         openai_base_url = None
         if self.api_provider == "openai":
-            openai_key = api_key or app_settings.openai_api_key
-            openai_base_url = api_base_url or app_settings.openai_base_url
+            openai_key = api_key
+            openai_base_url = api_base_url
         else:
-            openai_key = app_settings.openai_api_key
-            openai_base_url = app_settings.openai_base_url
+            openai_key = None
+            openai_base_url = None
 
         if openai_key:
             # 关闭思考: vLLM 标准写法, 不支持该字段的 OpenAI 兼容服务端会忽略
@@ -136,7 +144,7 @@ class AIService:
             self._openai_provider = OpenAIProvider(client)
         
         # 初始化 Anthropic
-        anthropic_key = api_key if self.api_provider == "anthropic" else app_settings.anthropic_api_key
+        anthropic_key = api_key if self.api_provider == "anthropic" else None
         if anthropic_key:
             base_url = api_base_url if self.api_provider == "anthropic" else app_settings.anthropic_base_url
             client = AnthropicClient(anthropic_key, base_url, self.config)
@@ -146,6 +154,27 @@ class AIService:
         if self.api_provider == "gemini" and api_key:
             client = GeminiClient(api_key, api_base_url, self.config)
             self._gemini_provider = GeminiProvider(client)
+
+    async def _check_account_binding(self):
+        """每次新调用前重新检查绑定，批量任务也不能继续使用已停用/替换的 Key。"""
+        if not self.user_id or self.db_session is None:
+            return
+        import hashlib
+        from fastapi import HTTPException
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+        from app.models.settings import Settings
+        from app.models.user import User
+        from app.services.user_ai_credentials import resolve_account_runtime
+        sessions = async_sessionmaker(self.db_session.bind, expire_on_commit=False)
+        async with sessions() as fresh:
+            user = await fresh.get(User, self.user_id)
+            if user is None or user.trust_level == -1:
+                raise HTTPException(403, "账号不存在或已停用。")
+            row = (await fresh.execute(select(Settings).where(Settings.user_id == self.user_id))).scalar_one_or_none()
+            runtime = resolve_account_runtime(row.api_key if row else None)
+            if hashlib.sha256(runtime["api_key"].encode()).digest() != self._credential_digest:
+                raise HTTPException(409, "账号 AI 密钥已变更，请重新发起任务。")
 
     @property
     def enable_mcp(self) -> bool:
@@ -358,6 +387,7 @@ class AIService:
                     tool_choice = kwargs.get("tool_choice", "auto")
                 
                 # 继续调用AI
+                await self._check_account_binding()
                 prov = self._get_provider(kwargs.get("provider"))
                 next_response = await prov.generate(
                     prompt=prompt,
@@ -432,6 +462,7 @@ class AIService:
         Returns:
             包含生成内容的字典
         """
+        await self._check_account_binding()
         # 使用全局配置的MCP轮数（如果未指定）
         if mcp_max_rounds is None:
             mcp_max_rounds = app_settings.mcp_max_rounds
@@ -525,6 +556,7 @@ class AIService:
         Yields:
             生成的文本块
         """
+        await self._check_account_binding()
         logger.debug(f"🔧 generate_text_stream: auto_mcp={auto_mcp}, tool_choice={tool_choice}")
         
         tools_to_use = None

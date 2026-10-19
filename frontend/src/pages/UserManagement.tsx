@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Table,
+  Alert,
   Button,
   Modal,
   Form,
@@ -64,6 +65,9 @@ export default function UserManagement() {
   const [resetPasswordModalVisible, setResetPasswordModalVisible] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserWithStatus | null>(null);
   const [newPassword, setNewPassword] = useState('');
+  const [credentialUser, setCredentialUser] = useState<UserWithStatus | null>(null);
+  const [credentialKey, setCredentialKey] = useState('');
+  const [credentialBusy, setCredentialBusy] = useState(false);
   const [pageSize, setPageSize] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchText, setSearchText] = useState('');
@@ -168,6 +172,7 @@ export default function UserManagement() {
     avatar_url?: string;
     trust_level?: number;
     is_admin?: boolean;
+    api_key?: string;
   }
 
   const handleCreate = async (values: CreateUserValues) => {
@@ -302,6 +307,59 @@ export default function UserManagement() {
     }
   };
 
+  const openCredential = (user: UserWithStatus) => {
+    setCredentialUser(user);
+    setCredentialKey('');
+  };
+
+  const saveCredential = async () => {
+    if (!credentialUser || !credentialKey.trim()) {
+      message.warning('请输入要绑定的新 AI Key');
+      return;
+    }
+    setCredentialBusy(true);
+    try {
+      await adminApi.bindAIKey(credentialUser.user_id, credentialKey.trim());
+      message.success('账号 AI Key 已绑定');
+      setCredentialKey('');
+      setCredentialUser(null);
+      await loadUsers();
+    } catch {
+      // 请求拦截器已显示服务端错误，保留输入以便修正。
+    } finally {
+      setCredentialBusy(false);
+    }
+  };
+
+  const testCredential = async () => {
+    if (!credentialUser) return;
+    setCredentialBusy(true);
+    try {
+      await adminApi.testAIKey(credentialUser.user_id, credentialKey.trim() || undefined);
+      message.success('AI 连接测试成功');
+    } catch {
+      // 请求拦截器已显示服务端错误，保留输入以便修正。
+    } finally {
+      setCredentialBusy(false);
+    }
+  };
+
+  const toggleCredential = async () => {
+    if (!credentialUser) return;
+    setCredentialBusy(true);
+    try {
+      await adminApi.setAIKeyStatus(credentialUser.user_id, credentialUser.ai_key_status !== 'bound');
+      message.success('AI Key 状态已更新');
+      setCredentialUser(null);
+      setCredentialKey('');
+      await loadUsers();
+    } catch {
+      // 请求拦截器已显示服务端错误，保留输入以便修正。
+    } finally {
+      setCredentialBusy(false);
+    }
+  };
+
   const isMobile = window.innerWidth <= 768;
 
   // 表格列定义
@@ -387,6 +445,19 @@ export default function UserManagement() {
       render: (date: string) => date ? new Date(date).toLocaleString('zh-CN') : '从未登录',
     },
     {
+      title: 'AI Key',
+      key: 'ai_key',
+      width: 160,
+      render: (_: unknown, record: UserWithStatus) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={record.ai_key_status === 'bound' ? 'success' : record.ai_key_status === 'disabled' ? 'warning' : 'default'}>
+            {record.ai_key_status === 'bound' ? '已绑定' : record.ai_key_status === 'disabled' ? '已停用' : '未绑定'}
+          </Tag>
+          {record.ai_key_masked && <Text type="secondary">{record.ai_key_masked}</Text>}
+        </Space>
+      ),
+    },
+    {
       title: '操作',
       key: 'action',
       width: isMobile ? 80 : 300,
@@ -397,6 +468,7 @@ export default function UserManagement() {
         // 移动端：使用下拉菜单
         if (isMobile) {
           const menuItems = [
+            { key: 'ai-key', label: '绑定 AI Key', icon: <KeyOutlined />, onClick: () => openCredential(record) },
             {
               key: 'edit',
               label: '编辑用户',
@@ -450,6 +522,9 @@ export default function UserManagement() {
         // 桌面端：保持原有按钮样式
         return (
           <Space size="small">
+            <Button type="link" size="small" icon={<KeyOutlined />} onClick={() => openCredential(record)}>
+              AI Key
+            </Button>
             <Button
               type="link"
               size="small"
@@ -704,6 +779,29 @@ export default function UserManagement() {
         </Card>
       </div>
 
+      <Modal
+        title={`账号 AI Key：${credentialUser?.username || ''}`}
+        open={!!credentialUser}
+        onCancel={() => { setCredentialUser(null); setCredentialKey(''); }}
+        destroyOnHidden
+        centered
+        footer={
+          <Space wrap>
+            {credentialUser?.ai_key_status && credentialUser.ai_key_status !== 'unbound' && (
+              <Button danger={credentialUser.ai_key_status === 'bound'} disabled={credentialBusy} onClick={toggleCredential}>
+                {credentialUser.ai_key_status === 'bound' ? '停用 Key' : '启用 Key'}
+              </Button>
+            )}
+            <Button loading={credentialBusy} disabled={!credentialKey.trim() && credentialUser?.ai_key_status !== 'bound'} onClick={testCredential}>测试连接</Button>
+            <Button type="primary" loading={credentialBusy} disabled={!credentialKey.trim()} onClick={saveCredential}>保存绑定</Button>
+          </Space>
+        }
+      >
+        <Alert showIcon type="info" message="每个账号使用独立的 AI Key" description="接口地址由服务器统一配置，模型可在个人设置中选择。密钥加密保存，保存后只显示末四位；未绑定或停用后无法发起 AI 调用。" style={{ marginBottom: 16 }} />
+        {credentialUser?.ai_key_masked && <p>当前绑定：{credentialUser.ai_key_masked}</p>}
+        <Input.Password value={credentialKey} onChange={event => setCredentialKey(event.target.value)} autoComplete="new-password" placeholder="粘贴此账号的 AI Key，保存将替换原绑定" />
+      </Modal>
+
       {/* 添加用户对话框 */}
       <Modal
         title={<span><PlusOutlined style={{ marginRight: 8 }} />添加用户</span>}
@@ -723,6 +821,9 @@ export default function UserManagement() {
           layout="vertical"
           onFinish={handleCreate}
         >
+          <Form.Item name="api_key" label="AI Key（可选）" extra="留空时账号暂不能使用 AI，之后可在账号列表绑定。">
+            <Input.Password autoComplete="new-password" placeholder="此账号独立使用的 AI Key" />
+          </Form.Item>
           <Form.Item
             label="用户名"
             name="username"

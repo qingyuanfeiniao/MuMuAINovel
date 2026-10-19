@@ -1,5 +1,5 @@
 """设置相关的Pydantic模型"""
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from typing import Optional, List
 from datetime import datetime
 
@@ -38,6 +38,16 @@ class SettingsResponse(SettingsBase):
     """设置响应模型"""
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
     
+    # 从尾号读取占位值，响应验证期间也不解密真实密钥。
+    api_key: Optional[str] = Field(default="", validation_alias="ai_key_masked")
+    ai_key_status: str = "unbound"
+    ai_key_masked: Optional[str] = None
+    ai_key_updated_at: Optional[datetime] = None
+
+    @field_serializer("api_key")
+    def hide_ai_key(self, value):
+        return ""
+
     id: str
     user_id: str
     created_at: datetime
