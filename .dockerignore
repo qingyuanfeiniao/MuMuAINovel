@@ -7,6 +7,8 @@ __pycache__/
 env/
 venv/
 ENV/
+.venv/
+**/.venv/
 *.egg-info/
 dist/
 build/
@@ -36,9 +38,16 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# 数据库文件（不包含在镜像中）
-data/*.db
-backend/data/*.db
+# 本机数据库、记忆、上传文件和 SQLite 日志不能打包进镜像。
+data/
+backend/data/
+storage/
+backend/storage/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 postgres_data/
 
 # ChromaDB数据库（不包含在镜像中，会在运行时生成）

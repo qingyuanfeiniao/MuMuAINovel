@@ -79,7 +79,7 @@
 - 📖 **章节编辑** - 支持创建、编辑、重新生成和润色
 - 🌐 **世界观设定** - 构建完整的故事背景
 - 🔐 **多种登录** - LinuxDO OAuth 或本地账户登录
-- 💾 **PostgreSQL** - 生产级数据库，多用户数据隔离
+- 💾 **SQLite** - 本 fork 默认使用文件数据库，适合个人与小规模部署
 - 🐳 **Docker 部署** - 一键启动，开箱即用
 
 ## 📸 项目预览
@@ -158,7 +158,7 @@
 | **存储** | 20 GB SSD |
 | **网络** | 稳定互联网连接 |
 
-### 高并发配置（80-150 用户）
+### 较大规模部署的硬件参考（未经本 fork 压测）
 
 | 组件 | 要求 |
 |------|------|
@@ -169,254 +169,61 @@
 
 > **📌 说明**
 > - **Embedding 模型**：约 400 MB 磁盘空间，运行时加载到内存
-> - **PostgreSQL**：默认配置使用 256 MB shared_buffers，1 GB effective_cache_size
+> - **SQLite**：无需独立数据库服务，数据文件保存在持久化目录
+> - 本 fork 的 SQLite 单进程方案面向个人与小规模使用，上述硬件参考不代表并发承诺
 > - **Docker 部署**：建议预留额外 1-2 GB 内存给容器运行时
 > - 本项目主要依赖外部 AI API（OpenAI/Claude/Gemini），不需要本地 GPU
 
 ## 🚀 快速开始
 
-### 前置要求
+本 fork 默认使用 `gpt-6-sol`。模型配置位于项目根目录的 `.env`：
 
-- Docker 和 Docker Compose
-- 至少一个 AI 服务的 API Key（OpenAI/Gemini/Claude）
+- `OPENAI_BASE_URL`：填写实际服务商的 OpenAI 兼容基础地址，不要附加 `/chat/completions`。
+- `OPENAI_API_KEY`：填写该服务商提供的密钥。
+- `DEFAULT_MODEL=gpt-6-sol`：接口必须支持这个模型名称。
 
-### Docker Compose 部署（推荐）
+`.env` 已由 Git 忽略，不要把真实密钥写入 `.env.example`。如果从 `backend/` 运行源码，
+可将 `backend/.env` 链接到根目录 `.env`，让本地运行和 Docker 共用同一份配置。
+应用中的“设置 → 当前配置”也可修改地址、密钥和模型；保存的用户配置会优先使用。
+
+### Docker Compose 部署（SQLite 单容器）
+
+需要 Docker、Docker Compose 和可用的 AI 服务密钥，无需安装 PostgreSQL。
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/xiamuceer-j/MuMuAINovel.git
+git clone https://github.com/qingyuanfeiniao/MuMuAINovel.git
 cd MuMuAINovel
-
-# 2. 配置环境变量（必需）
 cp backend/.env.example .env
-# 编辑 .env 文件，填入必要配置（API Key、数据库密码等）
-
-# 3. 确保文件准备完整
-# ⚠️ 重要：确保以下文件存在
-# - .env（配置文件，必需挂载到容器）
-# - backend/scripts/init_postgres.sql（数据库初始化脚本）
-
-# 4. 启动服务
-docker-compose up -d
-
-# 5. 访问应用
-# 打开浏览器访问 http://localhost:8000
+# 编辑 .env：填写 OPENAI_BASE_URL、OPENAI_API_KEY 和登录密码。
+# 已有 .env 时直接编辑，不要覆盖原配置。
+docker compose up -d --build
+docker compose logs -f
 ```
 
-> **📌 注意事项**
->
-> 1. **`.env` 文件挂载**: `docker-compose.yml` 会自动将 `.env` 挂载到容器，确保文件存在
-> 2. **数据库初始化**: `init_postgres.sql` 会在首次启动时自动执行，安装必要的PostgreSQL扩展
-> 3. **自行构建**: 如需从源码构建，请先下载 embedding 模型文件（[加群获取](frontend/public/qq.jpg)）
+访问 `http://服务器IP:8000`。首次构建会安装依赖、构建前端并下载约 450 MB 的向量模型，需要联网。请使用本仓库构建的镜像，SQLite 启动流程已包含在其中。
 
-### 使用 Docker Hub 镜像（推荐新手）
+容器固定使用 `/app/data/mumu.db`，不受宿主机 `.env` 中本地数据库路径影响；`.env.local` 不会打包或传入容器。启动时自动执行 SQLite 迁移，重建容器后数据保留在宿主机目录。
+
+### 本地开发（SQLite）
+
+本地源码运行可继续共用根目录 `.env`，并在 `backend/.env.local` 中覆盖本机配置：
 
 ```bash
-# 1. 拉取最新镜像（已包含模型文件）
-docker pull mumujie/mumuainovel:latest
-
-# 2. 创建 docker-compose.yml（点击下方展开查看完整配置）
+DATABASE_URL=sqlite+aiosqlite:///./data/mumu-local.db
+APP_HOST=127.0.0.1
+SESSION_COOKIE_SECURE=false
 ```
 
-<details>
-<summary>📄 点击展开 docker-compose.yml 完整配置</summary>
-
-```yaml
-services:
-  postgres:
-    image: postgres:18-alpine
-    container_name: mumuainovel-postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-mumuai_novel}
-      POSTGRES_USER: ${POSTGRES_USER:-mumuai}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
-      TZ: ${TZ:-Asia/Shanghai}
-    volumes:
-      - postgres_data:/var/lib/postgresql
-      - ./backend/scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mumuai} -d ${POSTGRES_DB:-mumuai_novel}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - ai-story-network
-    command:
-      - postgres
-      - -c
-      - max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
-      - -c
-      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
-      - -c
-      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}
-      - -c
-      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
-      - -c
-      - checkpoint_completion_target=${POSTGRES_CHECKPOINT_COMPLETION_TARGET:-0.9}
-      - -c
-      - wal_buffers=${POSTGRES_WAL_BUFFERS:-16MB}
-      - -c
-      - default_statistics_target=${POSTGRES_DEFAULT_STATISTICS_TARGET:-100}
-      - -c
-      - random_page_cost=${POSTGRES_RANDOM_PAGE_COST:-1.1}
-      - -c
-      - effective_io_concurrency=${POSTGRES_EFFECTIVE_IO_CONCURRENCY:-200}
-      - -c
-      - work_mem=${POSTGRES_WORK_MEM:-4MB}
-      - -c
-      - min_wal_size=${POSTGRES_MIN_WAL_SIZE:-1GB}
-      - -c
-      - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-4GB}
-
-  mumuainovel:
-    image: mumujie/mumuainovel:latest
-    container_name: mumuainovel
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "${APP_PORT:-8000}:8000"
-    volumes:
-      - ./logs:/app/logs
-      - ./.env:/app/.env:ro
-      - ./storage/generated_covers:/app/backend/storage/generated_covers
-    environment:
-      # 应用配置
-      - APP_NAME=${APP_NAME:-MuMuAINovel}
-      - APP_VERSION=${APP_VERSION:-1.5.7}
-      - APP_HOST=${APP_HOST:-0.0.0.0}
-      - APP_PORT=8000
-      - DEBUG=${DEBUG:-false}
-      # 数据库配置
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-123456}
-      # PostgreSQL 连接池配置
-      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-30}
-      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
-      - DATABASE_POOL_TIMEOUT=${DATABASE_POOL_TIMEOUT:-60}
-      - DATABASE_POOL_RECYCLE=${DATABASE_POOL_RECYCLE:-1800}
-      - DATABASE_POOL_PRE_PING=${DATABASE_POOL_PRE_PING:-True}
-      - DATABASE_POOL_USE_LIFO=${DATABASE_POOL_USE_LIFO:-True}
-      # 全局代理配置（可选）
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
-      # AI 服务配置
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
-      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-openai}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
-      - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
-      - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-32000}
-      - ALLOW_PRIVATE_AI_ENDPOINTS=${ALLOW_PRIVATE_AI_ENDPOINTS:-false}
-      - ALLOWED_AI_HOSTS=${ALLOWED_AI_HOSTS:-}
-      # LinuxDO OAuth 配置
-      - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-11111}
-      - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-11111}
-      - LINUXDO_REDIRECT_URI=${LINUXDO_REDIRECT_URI:-http://localhost:8000/api/auth/linuxdo/callback}
-      - LINUXDO_PROXY_URL=${LINUXDO_PROXY_URL:-}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
-      # 本地账户登录配置
-      - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
-      - LOCAL_AUTH_USERNAME=${LOCAL_AUTH_USERNAME:-admin}
-      - LOCAL_AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD:-admin123}
-      - LOCAL_AUTH_DISPLAY_NAME=${LOCAL_AUTH_DISPLAY_NAME:-本地管理员}
-      # 会话配置
-      - SESSION_EXPIRE_MINUTES=${SESSION_EXPIRE_MINUTES:-120}
-      - SESSION_REFRESH_THRESHOLD_MINUTES=${SESSION_REFRESH_THRESHOLD_MINUTES:-30}
-      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - ai-story-network
-
-volumes:
-  postgres_data:
-    driver: local
-
-networks:
-  ai-story-network:
-    driver: bridge
-```
-
-</details>
+后端使用 Python 3.12，安装 `backend/requirements.txt`，在 `backend/` 下执行：
 
 ```bash
-# 3. 启动服务
-docker-compose up -d
-
-# 4. 查看日志
-docker-compose logs -f
-
-# 5. 更新到最新版本
-docker-compose pull
-docker-compose up -d
+python -m alembic -c alembic-sqlite.ini upgrade head
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-> **💡 提示**: Docker Hub 镜像已包含所有依赖和模型文件，无需额外下载
+本地运行还需要准备 ONNX 向量模型，路径见 Dockerfile 中的 `ONNX_EMBEDDING_MODEL_DIR` 及下载校验步骤；本地路径为 `backend/embedding/onnx/paraphrase-multilingual-MiniLM-L12-v2/`。
 
-### 本地开发 / 从源码构建
-
-#### 前置准备
-
-```bash
-# ⚠️ 重要：如果从源码构建，需要先下载 embedding 模型文件
-# 模型文件较大（约 400MB），需放置到以下目录：
-# backend/embedding/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2/
-#
-# 📥 获取方式：
-# - 加入项目 QQ 群或 Linux DO 讨论区获取下载链接
-# - 群号：见项目主页
-# - Linux DO：https://linux.do/t/topic/1100112
-```
-
-#### 后端
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-
-# 配置 .env 文件
-cp .env.example .env
-# 编辑 .env 填入必要配置
-
-# 启动 PostgreSQL（可使用 Docker）
-docker run -d --name postgres \
-  -e POSTGRES_PASSWORD=your_password \
-  -e POSTGRES_DB=mumuai_novel \
-  -p 5432:5432 \
-  postgres:18-alpine
-
-# 启动后端
-python -m uvicorn app.main:app --host localhost --port 8000 --reload
-```
-
-#### 前端
-
-```bash
-cd frontend
-npm install
-npm run dev  # 开发模式
-npm run build  # 生产构建
-```
+前端在 `frontend/` 下执行 `npm ci`、`npm run dev`，开发页面默认端口为 5173。`npm run build` 会生成后端使用的静态页面。
 
 ## ⚙️ 配置说明
 
@@ -425,15 +232,13 @@ npm run build  # 生产构建
 创建 `.env` 文件：
 
 ```bash
-# PostgreSQL 数据库（必需）
-DATABASE_URL=postgresql+asyncpg://mumuai:your_password@postgres:5432/mumuai_novel
-POSTGRES_PASSWORD=your_secure_password
+# Docker Compose 已固定 SQLite 路径，无需配置数据库密码。
 
 # AI 服务
 OPENAI_API_KEY=your_openai_key
 OPENAI_BASE_URL=https://api.openai.com/v1
 DEFAULT_AI_PROVIDER=openai
-DEFAULT_MODEL=gpt-4o-mini
+DEFAULT_MODEL=gpt-6-sol
 
 # 本地账户登录
 LOCAL_AUTH_ENABLED=true
@@ -451,13 +256,9 @@ LINUXDO_REDIRECT_URI=http://localhost:8000/api/auth/callback
 # LinuxDO 登录专用代理（可选，仅影响 OAuth token 与用户信息请求）
 LINUXDO_PROXY_URL=http://127.0.0.1:7890
 
-# PostgreSQL 连接池（高并发优化）
-DATABASE_POOL_SIZE=30
-DATABASE_MAX_OVERFLOW=20
-
 # 会话 Cookie Secure 标记
-# 默认 true，适合 HTTPS 部署；如果使用 HTTP 访问并且浏览器不保存登录 Cookie，可设为 false
-SESSION_COOKIE_SECURE=true
+# HTTP 部署使用 false；配置 HTTPS 后改为 true
+SESSION_COOKIE_SECURE=false
 
 # 本地 / Docker 内网 LLM（默认关闭，保持 SSRF 防护）
 # ALLOW_PRIVATE_AI_ENDPOINTS=true
@@ -468,7 +269,7 @@ SESSION_COOKIE_SECURE=true
 >
 > - HTTPS 部署：建议保持 `SESSION_COOKIE_SECURE=true`，浏览器只会通过 HTTPS 发送登录 Cookie。
 > - HTTP 部署：如果登录后浏览器没有保存 Cookie，请在 `.env` 中设置 `SESSION_COOKIE_SECURE=false`，然后重启后端或 Docker 容器。
-> - Docker Compose 示例默认使用 `SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}`，如需关闭必须在 `.env` 中显式配置。
+> - Docker Compose 默认使用 `SESSION_COOKIE_SECURE=false`；HTTPS 部署请在 `.env` 中设为 `true`。
 >
 > **🌐 LinuxDO 专用代理说明**
 >
@@ -499,58 +300,41 @@ OPENAI_BASE_URL=https://your-proxy-service.com/v1
 
 ## 🐳 Docker 部署详情
 
-### 服务架构
+### 服务与数据
 
-- **postgres**: PostgreSQL 18 数据库
-  - 端口: 5432
-  - 数据持久化: `postgres_data` volume
-  - 初始化脚本: `backend/scripts/init_postgres.sql`（自动挂载）
-  - 优化配置: 支持 80-150 并发用户
+只有 `mumuainovel` 一个服务，对外端口为 8000。SQLite 不需要独立数据库容器，也不开放 5432 端口。应用使用单个工作进程，避免重复加载向量模型，并减少 SQLite 写入竞争。
 
-- **mumuainovel**: 主应用服务
-  - 端口: 8000
-  - 日志目录: `./logs`
-  - 配置挂载: `.env` 文件
-  - 自动等待数据库就绪
-  - 健康检查: 每 30 秒检测一次
+| 宿主机路径 | 容器内路径 | 内容 |
+|---|---|---|
+| `./data/mumu.db` | `/app/data/mumu.db` | 小说、章节、人物、设置等 SQLite 数据 |
+| `./data/chroma_db/` | `/app/data/chroma_db/` | 长期记忆和知识库向量数据 |
+| `./storage/knowledge/` | `/app/storage/knowledge/` | 知识库上传文件 |
+| `./storage/generated_covers/` | `/app/storage/generated_covers/` | 生成的封面 |
+| `./logs/` | `/app/logs/` | 应用日志 |
 
-### 重要文件说明
+首次启动自动建表，后续启动只执行尚未应用的迁移；迁移失败会停止启动。镜像不包含本机密钥、数据库、上传文件或虚拟环境。
 
-| 文件 | 说明 | 是否必需 |
-|------|------|---------|
-| `.env` | 环境配置（API Key、数据库密码等） | ✅ 必需 |
-| `docker-compose.yml` | 服务编排配置 | ✅ 必需 |
-| `backend/scripts/init_postgres.sql` | PostgreSQL 扩展安装脚本 | ✅ 自动挂载 |
-| `backend/embedding/models--*/` | Embedding 模型文件 | ⚠️ 自建需要 |
-
-> **注意**: 使用 Docker Hub 镜像时，模型文件已包含在镜像中，无需额外下载
+本地源码运行的数据在 `backend/data/` 等目录，Docker 使用项目根目录的 `data/` 和 `storage/`，两者不会自动同步。已有小说可通过应用的项目导出、导入功能迁移。
 
 ### 常用命令
 
 ```bash
-# 启动服务
-docker-compose up -d
-
-# 查看状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
-
-# 重启服务
-docker-compose restart
-
-# 查看资源使用
-docker stats
+# 构建并启动；修改配置或更新代码后也执行此命令
+docker compose up -d --build
+# 查看状态及日志
+docker compose ps
+docker compose logs -f
+# 停止（保留宿主机数据目录）
+docker compose down
+# 重启
+docker compose restart
 ```
 
-### 数据持久化
+### 备份
 
-- `./postgres_data` - PostgreSQL 数据库文件
-- `./logs` - 应用日志文件
+先运行 `docker compose stop`，再完整备份 `data/`、`storage/` 和 `.env`，完成后执行 `docker compose start`。SQLite 的 `-wal`、`-shm` 等附属文件如存在，也应保留在目录中；不要只复制运行中的 `mumu.db`。恢复时使用同一批备份文件。
+
+移除 PostgreSQL 可以减少资源占用，但本地向量模型仍会加载到内存；服务器容量还需包含应用和向量检索的开销。
 
 ### 端口配置
 
@@ -589,7 +373,7 @@ MuMuAINovel/
 
 ## 🛠️ 技术栈
 
-**后端**: FastAPI • PostgreSQL • SQLAlchemy • OpenAI/Claude/Gemini SDK
+**后端**: FastAPI • SQLite • SQLAlchemy • OpenAI/Claude/Gemini SDK
 
 **前端**: React 18 • TypeScript • Ant Design • Zustand • Vite
 

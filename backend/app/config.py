@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     anthropic_base_url: Optional[str] = None
     default_ai_provider: str = "openai"
-    default_model: str = "gpt-4"
+    default_model: str = "gpt-6-sol"
     default_temperature: float = 0.7
     default_max_tokens: int = 32000
     # Allow Ollama / local Llama / Docker host.docker.internal as AI base URLs.
@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     WORKSHOP_API_TIMEOUT: int = 30  # 云端API请求超时时间（秒）
     
     class Config:
-        env_file = ".env"
+        env_file = (".env", ".env.local")
         case_sensitive = False
         extra = "ignore"  # 忽略未定义的环境变量，避免验证错误
 

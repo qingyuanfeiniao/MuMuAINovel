@@ -52,12 +52,10 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
         sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources; \
     fi
 
-# 安装系统依赖（添加数据库工具）
+# 安装构建与模型下载依赖；SQLite 不需要独立数据库客户端。
 RUN apt-get update && apt-get install -y \
     gcc \
     curl \
-    postgresql-client \
-    netcat-traditional \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制后端依赖文件
@@ -88,9 +86,8 @@ COPY backend/ ./
 # 从前端构建阶段复制构建好的静态文件
 COPY --from=frontend-builder /frontend/dist ./static
 
-# 复制 Alembic 迁移配置和脚本（PostgreSQL）
-COPY backend/alembic-postgres.ini ./alembic.ini
-COPY backend/alembic/postgres ./alembic
+# backend/ 已包含完整迁移目录；默认配置切换到 SQLite。
+COPY backend/alembic-sqlite.ini ./alembic.ini
 COPY backend/scripts/entrypoint.sh /app/entrypoint.sh
 COPY backend/scripts/migrate.py ./scripts/migrate.py
 
@@ -98,7 +95,7 @@ COPY backend/scripts/migrate.py ./scripts/migrate.py
 RUN chmod +x /app/entrypoint.sh
 
 # 创建必要的目录
-RUN mkdir -p /app/data /app/logs
+RUN mkdir -p /app/data /app/storage /app/logs
 
 # 暴露端口
 EXPOSE 8000
@@ -107,9 +104,10 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV APP_HOST=0.0.0.0
 ENV APP_PORT=8000
+ENV DATABASE_URL=sqlite+aiosqlite:////app/data/mumu.db
 
 # 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # 使用 entrypoint 脚本启动（自动执行迁移）

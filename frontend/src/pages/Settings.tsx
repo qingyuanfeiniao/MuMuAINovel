@@ -9,6 +9,7 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 const { TextArea } = Input;
+const DEFAULT_LLM_MODEL = 'gpt-6-sol';
 
 export default function SettingsPage() {
   const { token } = theme.useToken();
@@ -116,7 +117,7 @@ export default function SettingsPage() {
         form.setFieldsValue({
           api_provider: 'openai',
           api_base_url: 'https://api.openai.com/v1',
-          llm_model: 'gpt-4',
+          llm_model: DEFAULT_LLM_MODEL,
           temperature: 0.7,
           max_tokens: 2000,
           disable_thinking: false,
@@ -255,7 +256,7 @@ export default function SettingsPage() {
           api_provider: 'openai',
           api_key: '',
           api_base_url: 'https://api.openai.com/v1',
-          llm_model: 'gpt-4',
+          llm_model: DEFAULT_LLM_MODEL,
           temperature: 0.7,
           max_tokens: 2000,
           disable_thinking: false,
@@ -291,7 +292,6 @@ export default function SettingsPage() {
   };
 
   const mumuTextDefaultUrl = 'https://zhongzhuan.mumuverse.space/v1';
-  const mumuRegisterUrl = 'https://zhongzhuan.mumuverse.space/register?aff=gt7d';
   const xiaomiMimoDefaultUrl = 'https://token-plan-cn.xiaomimimo.com/v1';
   const builtInKeyProviders = ['xiaomi_mimo'];
   const xiaomiMimoDefaultModels = [
@@ -566,6 +566,7 @@ export default function SettingsPage() {
       presetForm.setFieldsValue({
         api_provider: 'openai',
         api_base_url: 'https://api.openai.com/v1',
+        llm_model: DEFAULT_LLM_MODEL,
         temperature: 0.7,
         max_tokens: 32000,
       });
@@ -1261,29 +1262,6 @@ export default function SettingsPage() {
                             </Select>
                           </Form.Item>
 
-                          {selectedProvider === 'mumu' && (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="MuMuのAPI 专属供应商"
-                              description={
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text>
-                                    已自动填入专属地址，API Key 保持留空。免费注册后即可获取可用 Key。
-                                  </Text>
-                                  <div>
-                                    <Button
-                                      type="primary"
-                                      onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                                    >
-                                      打开 MuMuのAPI 站点免费注册
-                                    </Button>
-                                  </div>
-                                </Space>
-                              }
-                              style={{ marginBottom: 16 }}
-                            />
-                          )}
 
                           {selectedProvider === 'xiaomi_mimo' && (
                             <Alert
@@ -1343,7 +1321,7 @@ export default function SettingsPage() {
                               <Space size={4}>
                                 <span>模型名称</span>
                                 <InfoCircleOutlined
-                                  title="AI模型的名称，如 gpt-4, gpt-3.5-turbo"
+                                  title="AI模型的名称，默认 gpt-6-sol；需与接口支持的模型名称一致"
                                   style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
                                 />
                               </Space>
@@ -1805,29 +1783,6 @@ export default function SettingsPage() {
                           </Select>
                         </Form.Item>
 
-                        {selectedCoverProvider === 'mumu' && (
-                          <Alert
-                            type="info"
-                            showIcon
-                            message="MuMuのAPI 专属适配器"
-                            description={
-                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                <Text>
-                                  已固定提供 MuMuのAPI 图片接口地址选项，切换地址时会自动带出推荐模型。API Key 需前往 MuMuのAPI 站点注册获取。
-                                </Text>
-                                <div>
-                                  <Button
-                                    type="primary"
-                                    onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                                  >
-                                    打开 MuMuのAPI 站点免费注册
-                                  </Button>
-                                </div>
-                              </Space>
-                            }
-                            style={{ marginBottom: 16 }}
-                          />
-                        )}
 
                         <Form.Item label="封面图片 API Key" name="cover_api_key" rules={[{ required: true, message: '请输入封面图片 API Key' }]}>
                           <Input.Password size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'mumu' ? '请输入 MuMuのAPI Key' : '输入封面图片 API Key'} autoComplete="new-password" />
@@ -1950,29 +1905,6 @@ export default function SettingsPage() {
                   </Select>
                 </Form.Item>
 
-                {selectedPresetProvider === 'mumu' && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="MuMuのAPI 专属供应商"
-                    description={
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <Text>
-                          已自动填入专属地址，API Key 保持留空。免费注册后即可获取可用 Key。
-                        </Text>
-                        <div>
-                          <Button
-                            type="primary"
-                            onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                          >
-                            打开 MuMuのAPI 站点免费注册
-                          </Button>
-                        </div>
-                      </Space>
-                    }
-                    style={{ marginBottom: 16 }}
-                  />
-                )}
 
                 {selectedPresetProvider === 'xiaomi_mimo' && (
                   <Alert

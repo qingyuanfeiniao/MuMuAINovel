@@ -42,7 +42,7 @@ class MemoryService:
             self._initialized = True
             logger.info("✅ MemoryService初始化成功")
             logger.info(f"  - ChromaDB目录: {chroma_dir}")
-            logger.info("  - Embedding模型: paraphrase-multilingual-MiniLM-L12-v2 (ONNX FP32)")
+            logger.info("  - Embedding模型: paraphrase-multilingual-MiniLM-L12-v2 (ONNX)")
             
         except Exception as e:
             logger.error(f"❌ MemoryService初始化失败: {str(e)}")

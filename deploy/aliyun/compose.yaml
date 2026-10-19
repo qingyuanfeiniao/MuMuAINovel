@@ -1,0 +1,52 @@
+name: ai-novel-production
+services:
+  novel:
+    image: ${AI_NOVEL_IMAGE:?Set AI_NOVEL_IMAGE to the release image}
+    container_name: ai-novel-production
+    init: true
+    user: "10001:10001"
+    env_file:
+      - ../../shared/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../shared/data:/app/data
+      - ../../shared/storage:/app/storage
+      - ../../shared/logs:/app/logs
+      - ../../shared/.instance_id:/app/.instance_id
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+      DATABASE_URL: sqlite+aiosqlite:////app/data/mumu.db
+      ONNX_EMBEDDING_MODEL_DIR: /app/embedding
+      ONNX_EMBEDDING_MODEL_FILE: model.ort
+      ONNX_EMBEDDING_TOKENIZER: sentencepiece
+      ONNX_EMBEDDING_OFFLINE: "true"
+      ONNX_EMBEDDING_THREADS: "1"
+      ONNX_EMBEDDING_LOW_MEMORY: "true"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      ANONYMIZED_TELEMETRY: "false"
+    mem_limit: 512m
+    memswap_limit: 512m
+    mem_reservation: 256m
+    cpus: "0.50"
+    pids_limit: 96
+    oom_score_adj: 500
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s

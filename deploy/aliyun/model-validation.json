@@ -1,0 +1,6 @@
+{
+  "cosine_min": 0.9862706065177917,
+  "cosine_mean": 0.9941985011100769,
+  "tokenizer_equivalent_samples": 12,
+  "embedding_dimension": 384
+}

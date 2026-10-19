@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Sequence
 
 import numpy as np
@@ -24,6 +25,7 @@ from tokenizers import Tokenizer
 MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 MODEL_ENV_VAR = "ONNX_EMBEDDING_MODEL_DIR"
 MODEL_OFFLINE_ENV_VAR = "ONNX_EMBEDDING_OFFLINE"
+MODEL_FILE_ENV_VAR = "ONNX_EMBEDDING_MODEL_FILE"
 MODEL_REVISION = "60750e200f336606cdd1ecbda9bb33fbf4d5b2a1"
 MODEL_BASE_URL = (
     "https://modelscope.cn/models/"
@@ -50,7 +52,8 @@ SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 def _is_model_dir(path: Path) -> bool:
-    return all((path / filename).is_file() for filename in MODEL_FILES)
+    model_file = os.getenv(MODEL_FILE_ENV_VAR, "model.onnx")
+    return all((path / (model_file if filename == "model.onnx" else filename)).is_file() for filename in MODEL_FILES)
 
 
 def _is_offline() -> bool:
@@ -241,18 +244,36 @@ class OnnxEmbeddingModel:
         if config.get("pooling") != "mean" or config.get("normalize", False):
             raise ValueError("当前运行时仅支持不归一化的 Mean Pooling 模型")
 
-        self.tokenizer = Tokenizer.from_file(str(self.model_dir / "tokenizer.json"))
         pad_token = str(config.get("pad_token", "<pad>"))
-        pad_id = self.tokenizer.token_to_id(pad_token)
-        if pad_id is None:
-            raise ValueError(f"tokenizer 中不存在 padding token: {pad_token}")
-        self.tokenizer.enable_truncation(max_length=self.max_seq_length)
-        self.tokenizer.enable_padding(pad_id=pad_id, pad_token=pad_token)
+        self._use_sentencepiece = os.getenv("ONNX_EMBEDDING_TOKENIZER") == "sentencepiece"
+        if self._use_sentencepiece:
+            import sentencepiece
+            self.tokenizer = sentencepiece.SentencePieceProcessor(model_file=str(self.model_dir / "tokenizer.model"))
+            self._pad_id = self.tokenizer.pad_id()
+        else:
+            self.tokenizer = Tokenizer.from_file(str(self.model_dir / "tokenizer.json"))
+            pad_id = self.tokenizer.token_to_id(pad_token)
+            if pad_id is None:
+                raise ValueError(f"tokenizer 中不存在 padding token: {pad_token}")
+            self.tokenizer.enable_truncation(max_length=self.max_seq_length)
+            self.tokenizer.enable_padding(pad_id=pad_id, pad_token=pad_token)
 
         options = ort.SessionOptions()
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        model_file = os.getenv(MODEL_FILE_ENV_VAR, "model.onnx")
+        if threads := os.getenv("ONNX_EMBEDDING_THREADS"):
+            options.intra_op_num_threads = max(1, int(threads))
+            options.inter_op_num_threads = 1
+        if os.getenv("ONNX_EMBEDDING_LOW_MEMORY", "").lower() in {"1", "true", "yes", "on"}:
+            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            options.enable_cpu_mem_arena = False
+            options.enable_mem_pattern = False
+            if model_file.endswith(".ort"):
+                options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+                options.add_session_config_entry("session.use_ort_model_bytes_directly", "1")
+                options.add_session_config_entry("session.use_ort_model_bytes_for_initializers", "1")
         self.session = ort.InferenceSession(
-            str(self.model_dir / "model.onnx"),
+            str(self.model_dir / model_file),
             sess_options=options,
             providers=["CPUExecutionProvider"],
         )
@@ -265,7 +286,22 @@ class OnnxEmbeddingModel:
         if not batch:
             return np.empty((0, self.embedding_dimension), dtype=np.float32)
 
-        encodings = self.tokenizer.encode_batch(batch)
+        if self._use_sentencepiece:
+            ids = [
+                [self.tokenizer.bos_id()] + self.tokenizer.encode(text, out_type=int)[:self.max_seq_length - 2] + [self.tokenizer.eos_id()]
+                for text in batch
+            ]
+            width = max(len(item) for item in ids)
+            encodings = [
+                SimpleNamespace(
+                    ids=item + [self._pad_id] * (width - len(item)),
+                    attention_mask=[1] * len(item) + [0] * (width - len(item)),
+                    type_ids=[0] * width,
+                )
+                for item in ids
+            ]
+        else:
+            encodings = self.tokenizer.encode_batch(batch)
         inputs: dict[str, np.ndarray] = {
             "input_ids": np.asarray([item.ids for item in encodings], dtype=np.int64),
             "attention_mask": np.asarray(

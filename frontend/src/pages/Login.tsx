@@ -29,7 +29,6 @@ import {
 } from '@ant-design/icons';
 import { authApi } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import AnnouncementModal from '../components/AnnouncementModal';
 import ThemeSwitch from '../components/ThemeSwitch';
 
 const { Title, Paragraph, Text } = Typography;
@@ -85,7 +84,6 @@ export default function Login() {
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const primaryButtonShadow = `0 8px 20px ${alphaColor(token.colorPrimary, 0.28)}`;
   const hoverButtonShadow = `0 12px 28px ${alphaColor(token.colorPrimary, 0.36)}`;
-  const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [loginCodeSending, setLoginCodeSending] = useState(false);
   const [registerCodeSending, setRegisterCodeSending] = useState(false);
   const [resetCodeSending, setResetCodeSending] = useState(false);
@@ -156,16 +154,8 @@ export default function Login() {
   const handleLoginSuccess = () => {
     message.success('登录成功！');
 
-    const hideForever = localStorage.getItem('announcement_hide_forever');
-    const hideToday = localStorage.getItem('announcement_hide_today');
-    const today = new Date().toDateString();
-
-    if (hideForever === 'true' || hideToday === today) {
-      const redirect = searchParams.get('redirect') || '/';
-      navigate(redirect);
-    } else {
-      setShowAnnouncement(true);
-    }
+    const redirect = searchParams.get('redirect') || '/';
+    navigate(redirect);
   };
 
   const handleLocalLogin = async (values: LocalLoginValues) => {
@@ -300,28 +290,15 @@ export default function Login() {
     }
   };
 
-  const handleAnnouncementClose = () => {
-    setShowAnnouncement(false);
-    const redirect = searchParams.get('redirect') || '/';
-    navigate(redirect);
-  };
-
-  const handleDoNotShowToday = () => {
-    const today = new Date().toDateString();
-    localStorage.setItem('announcement_hide_today', today);
-  };
-
-  const handleNeverShow = () => {
-    localStorage.setItem('announcement_hide_forever', 'true');
-  };
-
   const loginTips = useMemo(() => {
-    const tips = [
-      '首次 LinuxDO 登录会自动创建账号。',
-    ];
+    const tips: string[] = [];
+
+    if (linuxdoEnabled) {
+      tips.push('首次 LinuxDO 登录会自动创建账号。');
+    }
 
     if (localAuthEnabled) {
-      tips.unshift('本地登录默认账号：admin / admin123');
+      tips.unshift('请使用管理员提供的账号和密码登录。');
     }
 
     if (emailAuthEnabled) {
@@ -329,7 +306,7 @@ export default function Login() {
     }
 
     return tips;
-  }, [emailAuthEnabled, localAuthEnabled]);
+  }, [emailAuthEnabled, linuxdoEnabled, localAuthEnabled]);
 
   const featureItems = [
     {
@@ -809,12 +786,6 @@ export default function Login() {
 
   return (
     <>
-      <AnnouncementModal
-        visible={showAnnouncement}
-        onClose={handleAnnouncementClose}
-        onDoNotShowToday={handleDoNotShowToday}
-        onNeverShow={handleNeverShow}
-      />
       <Layout style={{ minHeight: '100vh', background: token.colorBgLayout }}>
         <div
           style={{
@@ -965,7 +936,7 @@ export default function Login() {
                   <Tag color="purple">Claude</Tag>
                   <Tag color="cyan">LinuxDO OAuth</Tag>
                   <Tag color="green">Docker Compose</Tag>
-                  <Tag color="gold">PostgreSQL</Tag>
+                  <Tag color="gold">SQLite</Tag>
                 </Space>
               </div>
 
@@ -979,7 +950,7 @@ export default function Login() {
                   letterSpacing: 0.4,
                 }}
               >
-                © 2026 MuMuAINovel · GPLv3 License
+                MuMuAINovel
               </Paragraph>
             </section>
           </Col>

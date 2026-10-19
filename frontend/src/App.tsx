@@ -22,7 +22,6 @@ import UserManagement from './pages/UserManagement';
 import PromptTemplates from './pages/PromptTemplates';
 import SkillChat from './pages/SkillChat';
 import SkillManage from './pages/SkillManage';
-import Sponsor from './pages/Sponsor';
 import KnowledgeBase from './pages/KnowledgeBase';
 // import Polish from './pages/Polish';
 import Login from './pages/Login';
@@ -57,7 +56,7 @@ function App() {
           <Route path="/user-management" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
           <Route path="/chapters/:chapterId/reader" element={<ProtectedRoute><ChapterReader /></ProtectedRoute>} />
           <Route path="/project/:projectId" element={<ProtectedRoute><ProjectDetail /></ProtectedRoute>}>
-            <Route index element={<Navigate to="sponsor" replace />} />
+            <Route index element={<Navigate to="chapters" replace />} />
             <Route path="world-setting" element={<WorldSetting />} />
             <Route path="knowledge-base" element={<KnowledgeBase />} />
             <Route path="careers" element={<Careers />} />
@@ -73,7 +72,7 @@ function App() {
             <Route path="prompt-workshop" element={<PromptWorkshop />} />
             <Route path="skill-chat" element={<SkillChat />} />
             <Route path="skill-manage" element={<SkillManage />} />
-            <Route path="sponsor" element={<Sponsor />} />
+            <Route path="sponsor" element={<Navigate to="../chapters" replace />} />
             {/* <Route path="polish" element={<Polish />} /> */}
           </Route>
         </Routes>

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Card, Button, Modal, message, Spin, Space, Tag, Typography, Upload, Checkbox, Tooltip, Drawer, Menu, theme, Badge } from 'antd';
-import { EditOutlined, BookOutlined, CalendarOutlined, FileTextOutlined, TrophyOutlined, SettingOutlined, UploadOutlined, ApiOutlined, FileSearchOutlined, MenuUnfoldOutlined, MenuFoldOutlined, BulbOutlined, MoonOutlined, DesktopOutlined, MailOutlined, BellOutlined } from '@ant-design/icons';
+import { Card, Button, Modal, message, Spin, Space, Tag, Typography, Upload, Checkbox, Tooltip, Drawer, Menu, theme } from 'antd';
+import { EditOutlined, BookOutlined, CalendarOutlined, FileTextOutlined, TrophyOutlined, SettingOutlined, UploadOutlined, ApiOutlined, FileSearchOutlined, MenuUnfoldOutlined, MenuFoldOutlined, BulbOutlined, MoonOutlined, DesktopOutlined, MailOutlined } from '@ant-design/icons';
 import { authApi, projectApi } from '../services/api';
 import { useStore } from '../store';
 import { useProjectSync } from '../store/hooks';
@@ -9,7 +9,6 @@ import { eventBus, EventNames } from '../store/eventBus';
 import type { ReactNode } from 'react';
 import type { Project, User } from '../types';
 import UserMenu from '../components/UserMenu';
-import ChangelogFloatingButton from '../components/ChangelogFloatingButton';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import SettingsPage from './Settings';
@@ -19,8 +18,6 @@ import PromptTemplates from './PromptTemplates';
 import BookImport from './BookImport';
 import BookshelfPage from './BookshelfPage';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
-import AnnouncementTimelineModal from '../components/AnnouncementTimelineModal';
-import { useAnnouncements } from '../hooks/useAnnouncements';
 
 const { Text } = Typography;
 
@@ -59,7 +56,6 @@ export default function ProjectList() {
   const location = useLocation();
   const { projects, loading } = useStore();
   const [drawerVisible, setDrawerVisible] = useState(false);
-  const [announcementVisible, setAnnouncementVisible] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => getStoredSidebarCollapsed());
   const [modal, contextHolder] = Modal.useModal();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -84,7 +80,6 @@ export default function ProjectList() {
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
-  const { announcements, loading: announcementsLoading, hasUnread: hasUnreadAnnouncements, refresh: refreshAnnouncements, markAllRead: markAllAnnouncementsRead } = useAnnouncements();
 
   const activeView = useMemo<ProjectListView>(() => parseViewFromSearch(location.search), [location.search]);
   const cycleThemeMode = () => {
@@ -451,11 +446,6 @@ export default function ProjectList() {
           icon: <MailOutlined />,
           label: '系统设置',
         }] : []),
-        {
-          key: 'mumu-api',
-          icon: <ApiOutlined />,
-          label: 'MuMuのAPI',
-        },
       ],
     },
   ];
@@ -491,11 +481,6 @@ export default function ProjectList() {
       icon: <MailOutlined />,
       label: '系统设置',
     }] : []),
-    {
-      key: 'mumu-api',
-      icon: <ApiOutlined />,
-      label: 'MuMuのAPI',
-    },
   ];
 
   return (
@@ -604,10 +589,6 @@ export default function ProjectList() {
               selectedKeys={[activeView]}
               style={{ borderRight: 0, paddingTop: 12, width: '100%' }}
               onClick={({ key }) => {
-                if (key === 'mumu-api') {
-                  window.open('https://zhongzhuan.mumuverse.space/register?aff=gt7d', '_blank', 'noopener,noreferrer');
-                  return;
-                }
                 changeView(key as ProjectListView);
               }}
               items={collapsed ? sideMenuItemsCollapsed : sideMenuItems}
@@ -700,19 +681,6 @@ export default function ProjectList() {
               {currentViewTitle}
             </h2>
 
-            <Badge dot={hasUnreadAnnouncements} offset={[-4, 4]}>
-              <Button
-                type="text"
-                icon={<BellOutlined />}
-                onClick={() => setAnnouncementVisible(true)}
-                style={{
-                  fontSize: 18,
-                  color: token.colorWhite,
-                  width: 36,
-                  height: 36
-                }}
-              />
-            </Badge>
           </>
         ) : (
           <>
@@ -736,22 +704,6 @@ export default function ProjectList() {
             </h2>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, zIndex: 1 }}>
-              <Badge dot={hasUnreadAnnouncements} offset={[-4, 4]}>
-                <Button
-                  type="text"
-                  icon={<BellOutlined />}
-                  onClick={() => setAnnouncementVisible(true)}
-                  style={{
-                    color: token.colorWhite,
-                    width: 40,
-                    height: 40,
-                    borderRadius: 20,
-                    background: alphaColor(token.colorWhite, 0.12),
-                    border: `1px solid ${alphaColor(token.colorWhite, 0.18)}`,
-                  }}
-                  title="系统公告"
-                />
-              </Badge>
               {activeView === 'projects' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
                   {projects.length > 0 && (
@@ -837,11 +789,6 @@ export default function ProjectList() {
               selectedKeys={[activeView]}
               style={{ borderRight: 0, paddingTop: 8 }}
               onClick={({ key }) => {
-                if (key === 'mumu-api') {
-                  window.open('https://zhongzhuan.mumuverse.space/register?aff=gt7d', '_blank', 'noopener,noreferrer');
-                  setDrawerVisible(false);
-                  return;
-                }
                 changeView(key as ProjectListView);
                 setDrawerVisible(false);
               }}
@@ -921,18 +868,8 @@ export default function ProjectList() {
             />
           )}
         
-        <ChangelogFloatingButton />
         </div>
       </div>
-
-      <AnnouncementTimelineModal
-        visible={announcementVisible}
-        announcements={announcements}
-        loading={announcementsLoading}
-        onClose={() => setAnnouncementVisible(false)}
-        onRefresh={() => void refreshAnnouncements({ full: true })}
-        onMarkAllRead={markAllAnnouncementsRead}
-      />
 
       {/* 导入项目对话框 */}
       <Modal
